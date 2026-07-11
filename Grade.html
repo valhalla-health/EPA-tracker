@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --rose900:oklch(32% 0.10 350); --rose700:oklch(45% 0.15 350); --rose600:oklch(52% 0.17 350);
+    --rose100:oklch(94% 0.035 350); --rose50:oklch(97.5% 0.018 350); --border:oklch(88% 0.05 350);
+    --ink:oklch(23% 0.02 20); --muted:oklch(50% 0.02 20); --bg:oklch(97.3% 0.008 25);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Sarabun',system-ui,sans-serif;background:var(--bg);min-height:100vh;color:var(--ink);padding-bottom:60px}
+  .header{background:linear-gradient(135deg,var(--rose900),var(--rose700));color:#fff;padding:18px 28px}
+  .wrap{max-width:820px;margin:0 auto;padding:22px 20px}
+  .card{background:#fff;border:1px solid var(--border);border-radius:18px;padding:20px 22px;margin-bottom:14px}
+  textarea{width:100%;min-height:80px;margin-top:5px;padding:10px;border:1px solid oklch(89% 0.02 20);border-radius:10px;font-size:14px;box-sizing:border-box;font-family:inherit;resize:vertical}
+  label.field-label{font-size:12px;font-weight:700;color:var(--muted)}
+  .opt-btn{border:1px solid oklch(88% 0.02 20);background:#fff;color:var(--ink);font-weight:700;font-size:12px;padding:6px 10px;border-radius:8px;cursor:pointer;min-width:34px}
+  .opt-btn.active{border-color:var(--rose600);background:var(--rose600);color:#fff}
+  .opt-btn-pill{border-radius:999px;font-size:11.5px}
+  .btn{border:0;background:var(--rose600);color:#fff;font-weight:700;font-size:14px;padding:12px 22px;border-radius:999px;cursor:pointer}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn-ghost{border:1px solid var(--border);background:#fff;color:oklch(38% 0.12 350);font-weight:700;font-size:12px;padding:7px 12px;border-radius:999px;cursor:pointer}
+  .domain-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-top:1px solid oklch(93% 0.01 20)}
+  .section-box{border:1px solid var(--border);border-radius:14px;padding:12px 14px;margin-bottom:10px;background:oklch(99% 0.004 30)}
+  .sig-canvas{border:1px solid oklch(89% 0.02 20);border-radius:10px;touch-action:none;width:100%;height:150px;background:#fff}
+  .errbox{background:#fff;border:1px solid var(--border);border-radius:16px;padding:30px;text-align:center;color:var(--muted)}
+  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 20px;border-radius:14px;font-size:13.5px;font-weight:600;box-shadow:0 14px 30px rgba(0,0,0,.25)}
+</style>
+</head>
+<body>
+<div class="header"><div style="max-width:820px;margin:0 auto"><div style="font-size:18px;font-weight:700">Newborn EPA Tracker</div><div style="font-size:12.5px;opacity:.85">Faculty grading</div></div></div>
+<div class="wrap" id="app">Loading…</div>
+<script>
+const TOKEN = <?= JSON.stringify(token) ?>;
+let DATA = null;
+let SCORES = {};
+let RESULT = '';
+let COMMENT = '';
+let SUBMITTED = false;
+
+function esc(str){ return String(str==null?'':str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function call(fn, ...args){
+  return new Promise((resolve, reject) => {
+    google.script.run.withSuccessHandler(resolve).withFailureHandler(err=>reject(err))[fn](...args);
+  });
+}
+function toast(text){
+  const t = document.createElement('div'); t.className='toast'; t.textContent=text;
+  document.body.appendChild(t); setTimeout(()=>t.remove(), 3200);
+}
+
+function load(){
+  if (!TOKEN) { document.getElementById('app').innerHTML = '<div class="errbox">ไม่พบลิงก์ประเมิน (missing token)</div>'; return; }
+  call('api_getGradingByToken', TOKEN).then(res => {
+    if (!res.ok) { document.getElementById('app').innerHTML = '<div class="errbox">'+esc(res.error)+'</div>'; return; }
+    DATA = res; SCORES = {}; RESULT=''; COMMENT='';
+    render();
+  }).catch(err => { document.getElementById('app').innerHTML = '<div class="errbox">Error: '+esc(err.message||err)+'</div>'; });
+}
+
+function render(){
+  if (SUBMITTED) return;
+  const s = DATA.submission;
+  let html = '<div class="card">'+
+    '<div style="font-size:12px;font-weight:700;color:var(--rose600);text-transform:uppercase;letter-spacing:.04em">'+s.categoryLabel+' · '+esc(s.subtype)+'</div>'+
+    '<h2 style="margin:2px 0 0;font-size:19px">'+esc(s.title)+'</h2>'+
+    '<div style="color:var(--muted);font-size:13px;margin-top:4px">Fellow: <b style="color:var(--ink)">'+esc(s.fellowName)+'</b></div>'+
+    '<div style="font-size:12.5px;color:var(--muted);margin-top:8px"><b style="color:var(--ink)">'+esc(s.patientName)+'</b> · HN '+esc(s.hn)+' · '+esc(s.diagnosis||'-')+'<br>'+esc(s.location||'-')+' · '+esc(s.caseDate)+'</div>'+
+    '<div style="background:var(--rose50);border:1px solid var(--border);border-radius:12px;padding:10px 14px;margin-top:12px;font-size:12.5px;color:var(--muted)"><b style="color:var(--ink)">Reflection:</b> '+esc(s.reflection||'-')+'</div>'+
+  '</div>';
+
+  html += '<div class="card"><div style="font-weight:700;font-size:15px;margin-bottom:10px">Domain scores</div>';
+  DATA.sections.forEach((sec, si) => {
+    html += '<div class="section-box">';
+    if (sec.section) html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">'+esc(sec.section)+'</b>'+
+      '<button class="btn-ghost" data-markall="'+si+'">Mark all appropriate</button></div>';
+    sec.items.forEach(d => {
+      const val = SCORES[d.key] || '';
+      const options = s.isChecklist ? [['APPROPRIATE','Appropriate'],['INAPPROPRIATE','Inappropriate'],['N/A','N/A']] : ['1','2','3','4','5','6','7','8','9','N/A'].map(v=>[v,v]);
+      html += '<div class="domain-row"><div style="font-size:13px;flex:1;min-width:180px">'+esc(d.label)+'</div>'+
+        '<div style="display:flex;gap:5px;flex-wrap:wrap">'+
+        options.map(([v,label])=>'<button class="opt-btn '+(s.isChecklist?'opt-btn-pill':'')+' '+(val===v?'active':'')+'" data-domain="'+d.key+'" data-val="'+v+'">'+label+'</button>').join('')+
+        '</div></div>';
+    });
+    html += '</div>';
+  });
+  html += '</div>';
+
+  html += '<div class="card"><div style="font-weight:700;font-size:14px;margin-bottom:8px">'+(s.isChecklist?'Global result':'Overall entrustment level')+'</div>'+
+    '<div style="display:flex;flex-direction:column;gap:6px">'+
+    DATA.globalOptions.map(o=>'<button class="opt-btn '+(RESULT===o?'active':'')+'" style="text-align:left;padding:9px 12px" data-result="'+o+'">'+esc(levelLabel(o, s.isChecklist))+'</button>').join('')+
+    '</div></div>';
+
+  html += '<div class="card"><label class="field-label">Feedback for fellow</label><textarea id="commentBox">'+esc(COMMENT)+'</textarea></div>';
+
+  html += '<div class="card"><label class="field-label">Assessor signature — please sign to submit</label>'+
+    '<canvas id="sigCanvas" class="sig-canvas"></canvas>'+
+    '<div style="margin-top:6px"><button id="sigClear" class="btn-ghost">Clear</button></div></div>';
+
+  html += '<button id="btnSubmitGrading" class="btn" style="width:100%">Submit Grading</button>';
+
+  document.getElementById('app').innerHTML = html;
+  bind();
+}
+
+function levelLabel(v, isChecklist){
+  if (isChecklist) return v;
+  const desc = {
+    '1':'L1 · ปฏิบัติงานได้ภายใต้การควบคุมของอาจารย์อย่างใกล้ชิด',
+    '2':'L2 · ปฏิบัติงานได้เองภายใต้การชี้แนะของอาจารย์',
+    '3':'L3 · ปฏิบัติงานได้เอง อาจารย์ให้ความช่วยเหลือเมื่อต้องการ',
+    '4':'L4 · สามารถปฏิบัติงานได้เอง',
+    '5':'L5 · ปฏิบัติงานได้เอง และสามารถควบคุมผู้ที่มีประสบการณ์น้อยกว่า'
+  };
+  return desc[v] || v;
+}
+
+let sigCtx=null, sigDrawing=false, sigLast=null, sigCanvasEl=null;
+function setupSigCanvas(){
+  sigCanvasEl = document.getElementById('sigCanvas');
+  if (!sigCanvasEl) return;
+  sigCtx = sigCanvasEl.getContext('2d');
+  const r = sigCanvasEl.getBoundingClientRect();
+  sigCanvasEl.width = r.width*2; sigCanvasEl.height = r.height*2;
+  sigCtx.scale(2,2); sigCtx.lineWidth=2; sigCtx.lineCap='round'; sigCtx.strokeStyle='#23151f';
+  function pos(e){ const rr=sigCanvasEl.getBoundingClientRect(); const p=e.touches?e.touches[0]:e; return {x:p.clientX-rr.left,y:p.clientY-rr.top}; }
+  function start(e){ sigDrawing=true; sigLast=pos(e); e.preventDefault(); }
+  function move(e){ if(!sigDrawing) return; const p=pos(e); sigCtx.beginPath(); sigCtx.moveTo(sigLast.x,sigLast.y); sigCtx.lineTo(p.x,p.y); sigCtx.stroke(); sigLast=p; e.preventDefault(); }
+  function end(){ sigDrawing=false; }
+  sigCanvasEl.addEventListener('mousedown',start); sigCanvasEl.addEventListener('mousemove',move); window.addEventListener('mouseup',end);
+  sigCanvasEl.addEventListener('touchstart',start); sigCanvasEl.addEventListener('touchmove',move); sigCanvasEl.addEventListener('touchend',end);
+  const clearBtn = document.getElementById('sigClear');
+  if (clearBtn) clearBtn.onclick = () => sigCtx.clearRect(0,0,sigCanvasEl.width,sigCanvasEl.height);
+}
+function sigIsEmpty(){
+  if (!sigCtx || !sigCanvasEl) return true;
+  const d = sigCtx.getImageData(0,0,sigCanvasEl.width,sigCanvasEl.height).data;
+  for (let i=3;i<d.length;i+=4) if (d[i]!==0) return false;
+  return true;
+}
+
+function bind(){
+  document.querySelectorAll('[data-domain]').forEach(el=>el.onclick=()=>{ SCORES[el.dataset.domain]=el.dataset.val; render(); });
+  document.querySelectorAll('[data-markall]').forEach(el=>el.onclick=()=>{
+    const sec = DATA.sections[Number(el.dataset.markall)];
+    sec.items.forEach(d=>SCORES[d.key]='APPROPRIATE');
+    render();
+  });
+  document.querySelectorAll('[data-result]').forEach(el=>el.onclick=()=>{ RESULT=el.dataset.result; render(); });
+  const commentBox = document.getElementById('commentBox'); if (commentBox) commentBox.oninput = e => COMMENT = e.target.value;
+  setupSigCanvas();
+  const btn = document.getElementById('btnSubmitGrading'); if (btn) btn.onclick = onSubmit;
+}
+
+function onSubmit(){
+  const allKeys = DATA.sections.flatMap(sec=>sec.items.map(d=>d.key));
+  const missing = allKeys.some(k=>!SCORES[k]);
+  if (missing) { toast('กรุณาให้คะแนนครบทุกโดเมน'); return; }
+  if (!RESULT) { toast('กรุณาเลือกผลรวม'); return; }
+  if (sigIsEmpty()) { toast('กรุณาเซ็นชื่อก่อนส่งผลประเมิน'); return; }
+
+  const btn = document.getElementById('btnSubmitGrading'); btn.disabled = true; btn.textContent = 'Submitting…';
+  const signaturePng = sigCanvasEl.toDataURL('image/png');
+  call('api_submitGrading', { token: TOKEN, scores: SCORES, globalResult: RESULT, comment: COMMENT, assessorSignaturePng: signaturePng })
+    .then(res => {
+      SUBMITTED = true;
+      const ok = !!res.pdfUrl;
+      document.getElementById('app').innerHTML = '<div class="card" style="text-align:center;padding:40px 20px">'+
+        '<div style="font-size:40px">'+(ok?'✅':'⚠️')+'</div><h2 style="margin:10px 0 6px">'+(ok?'ส่งผลประเมินเรียบร้อย':'บันทึกคะแนนแล้ว แต่สร้าง PDF ไม่สำเร็จ')+'</h2>'+
+        '<div style="color:var(--muted);font-size:13px">'+(ok?'Fellow ได้รับอีเมลผลประเมินพร้อม PDF แล้ว':'คะแนนถูกบันทึกแล้ว แต่ระบบส่งอีเมล/PDF ไม่สำเร็จ กรุณาแจ้งแอดมินให้ Regenerate PDF จากหน้า Admin')+'</div>'+
+        (ok ? '<a href="'+res.pdfUrl+'" target="_blank" style="display:inline-block;margin-top:16px" class="btn">Open PDF</a>' : '')+
+      '</div>';
+    })
+    .catch(err => { btn.disabled=false; btn.textContent='Submit Grading'; toast('Error: '+(err.message||err)); });
+}
+
+load();
+</script>
+</body>
+</html>
