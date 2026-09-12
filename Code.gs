@@ -190,7 +190,7 @@ function readObjects_(sheetName) {
 }
 function appendRow_(sheetName, headerOrder, obj) {
   const sh = getSheet_(sheetName);
-  sh.appendRow(headerOrder.map(h => (obj[h] === undefined || obj[h] === null) ? '' : obj[h]));
+  sh.appendRow(headerOrder.map(h => sheetSafe_((obj[h] === undefined || obj[h] === null) ? '' : obj[h])));
 }
 function findRowIndexByKey_(sheetName, keyField, keyValue) {
   const sh = getSheet_(sheetName);
@@ -211,8 +211,12 @@ function updateRowByKey_(sheetName, keyField, keyValue, patch) {
   if (rowIdx === -1) throw new Error('Row not found: ' + sheetName + ' ' + keyField + '=' + keyValue);
   const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
   const current = sh.getRange(rowIdx, 1, 1, headers.length).getValues()[0];
-  headers.forEach((h, i) => { if (patch.hasOwnProperty(h)) current[i] = patch[h]; });
+  headers.forEach((h, i) => { if (patch.hasOwnProperty(h)) current[i] = sheetSafe_(patch[h]); });
   sh.getRange(rowIdx, 1, 1, headers.length).setValues([current]);
+}
+function sheetSafe_(value) {
+  if (typeof value !== 'string') return value;
+  return /^[=+\-@\t\r]/.test(value) ? "'" + value : value;
 }
 function logAudit_(action, entityId, detail) {
   try {
@@ -280,9 +284,17 @@ function api_submitRequest(payload) {
     assessor_signature_png: '', pdf_file_id: '', pdf_url: ''
   };
   appendRow_(SHEETS.SUBMISSIONS, HEADERS.SUBMISSIONS, row);
+  try {
+    sendAssessorEmail_(row);
+  } catch (e) {
+    // Do not leave a dead PENDING token that causes a blind retry to create a
+    // duplicate request. The unique submission id makes this rollback safe.
+    const failedRow = findRowIndexByKey_(SHEETS.SUBMISSIONS, 'submission_id', submissionId);
+    if (failedRow > 0) getSheet_(SHEETS.SUBMISSIONS).deleteRow(failedRow);
+    logAudit_('submit_email_error', submissionId, { message: e.message });
+    throw new Error('Assessment request was not saved because the assessor email could not be sent. Please retry.');
+  }
   logAudit_('submit_request', submissionId, { fellowId: fellow.fellow_id, assessorId: assessor.faculty_id });
-
-  sendAssessorEmail_(row);
   return { ok: true, submissionId };
 }
 
@@ -312,6 +324,7 @@ function api_getGradingByToken(token) {
   if (String(s.token_used) === 'TRUE' || s.status === 'GRADED') return { ok: false, error: 'แบบประเมินนี้ถูกส่งไปแล้ว ลิงก์นี้ใช้ไม่ได้อีกต่อไป' };
 
   const assessment = readObjects_(SHEETS.ASSESSMENTS).find(a => a.assessment_id === s.assessment_id);
+  if (!assessment) return { ok: false, error: 'ไม่พบหัวข้อการประเมินนี้' };
   const isChecklist = assessment.category === 'COMMU';
   let sections;
   if (isChecklist) {
@@ -346,6 +359,7 @@ function api_submitGrading(payload) {
   if (String(s.token_used) === 'TRUE' || s.status === 'GRADED') throw new Error('แบบประเมินนี้ถูกส่งไปแล้ว');
   if (!payload.globalResult) throw new Error('กรุณาเลือกผลรวม (overall result)');
   if (!payload.assessorSignaturePng) throw new Error('กรุณาเซ็นชื่อก่อนส่งผลประเมิน');
+  validateGradingPayload_(s, payload);
 
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -374,6 +388,29 @@ function api_submitGrading(payload) {
     logAudit_('pdf_error', updated.submission_id, { message: e.message });
   }
   return { ok: true, pdfUrl };
+}
+
+function validateGradingPayload_(submission, payload) {
+  const isChecklist = submission.category === 'COMMU';
+  const allowedScores = isChecklist
+    ? ['APPROPRIATE', 'INAPPROPRIATE', 'N/A']
+    : ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'N/A'];
+  const allowedResults = isChecklist ? ['PASS', 'FAIL'] : ['1', '2', '3', '4', '5'];
+  const expectedKeys = Object.keys(domainLabelMap_(submission.category));
+  const scores = payload.scores || {};
+  if (!expectedKeys.length || Object.keys(scores).length !== expectedKeys.length ||
+      expectedKeys.some(key => !allowedScores.includes(String(scores[key])))) {
+    throw new Error('กรุณาให้คะแนนทุกโดเมนด้วยค่าที่กำหนด');
+  }
+  if (!allowedResults.includes(String(payload.globalResult))) {
+    throw new Error('ผลรวมไม่ถูกต้อง');
+  }
+  if (typeof payload.assessorSignaturePng !== 'string' ||
+      !/^data:image\/png;base64,/.test(payload.assessorSignaturePng) ||
+      payload.assessorSignaturePng.length > 2000000) {
+    throw new Error('ลายเซ็นไม่ถูกต้องหรือมีขนาดใหญ่เกินไป');
+  }
+  if (String(payload.comment || '').length > 5000) throw new Error('ความคิดเห็นยาวเกินไป');
 }
 
 /********************
@@ -450,7 +487,7 @@ function buildAndStorePdf_(s) {
   const mailOptions = {
     to: fellow.email || APP.UNIT_RECORD_EMAIL,
     subject: '[EPA Tracker] ผลประเมิน ' + CATEGORY_LABEL[s.category] + ' · ' + s.subtype + ' — ' + overallLabel,
-    htmlBody: '<p>ผลการประเมิน <b>' + s.title + '</b> โดย ' + s.assessor_name + '</p><p>ผลรวม: <b>' + overallLabel + '</b></p><p>ดูรายละเอียดในไฟล์ PDF ที่แนบมา</p>',
+    htmlBody: '<p>ผลการประเมิน <b>' + escapeHtml_(s.title) + '</b> โดย ' + escapeHtml_(s.assessor_name) + '</p><p>ผลรวม: <b>' + escapeHtml_(overallLabel) + '</b></p><p>ดูรายละเอียดในไฟล์ PDF ที่แนบมา</p>',
     attachments: [pdfBlob]
   };
   if (fellow.email) mailOptions.cc = APP.UNIT_RECORD_EMAIL;
